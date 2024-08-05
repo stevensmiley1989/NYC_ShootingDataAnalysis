@@ -1,0 +1,289 @@
+---
+title: "ShootingProject"
+author: "S.Smiley"
+date: "2024-08-03"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+# NYC Shooting Dataset Background
+  This report covers an analysis of the NYC shooting dataset found at "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD".  The dataset lists every shooting incident that occurred in NYC going back to 2006 through the end of the previous calendar year.  This is a breakdown of every shooting incident that occurred in NYC going back to 2006 through the end of the previous calendar year. This data is manually extracted every quarter and reviewed by the Office of Management Analysis and Planning before being posted on the NYPD website. Each record represents a shooting incident in NYC and includes information about the event, the location and time of occurrence. In addition, information related to suspect and victim demographics is also included. This data can be used by the public to explore the nature of shooting/criminal activity. 
+
+# Clear Statement of the Question of Interest
+  The question of interest I have from this dataset is:
+  **Does a victim's age, race, and sex indicate who the perpetrator might be?**
+  
+## Import Libraries
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+# Install necessary packages if they are not already installed
+if (!requireNamespace("readr", quietly = TRUE)) {
+  install.packages("readr")
+}
+if (!requireNamespace("dplyr", quietly = TRUE)) {
+  install.packages("dplyr")
+}
+if (!requireNamespace("ggplot2", quietly = TRUE)) {
+  install.packages("ggplot2")
+}
+if (!requireNamespace("VIM", quietly = TRUE)) {
+  install.packages("VIM")
+}
+if (!requireNamespace("nnet", quietly = TRUE)) {
+  install.packages("nnet")
+}
+# import libraries
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(VIM)
+library(tidyr)
+library(nnet)
+
+```
+# Data Loading
+## Get Shooting Data
+  Using the link of where the data comes from is a much more **reproducible** form of loading the data.
+```{r get_shooting_data}
+url_names <- c("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+
+shooting_data <- read_csv(url_names[1])
+head(shooting_data)
+```
+# Data Cleaning
+## Convert "(null)" strings to NA
+```{r fix_null}
+shooting_data[shooting_data == "(null)"] <- NA
+```
+## Remove unnecessary columns
+```{r remove_bad_cols}
+columns_to_keep <- c("OCCUR_DATE", "BORO", "PRECINCT", "PERP_AGE_GROUP", "PERP_SEX", "PERP_RACE", "VIC_AGE_GROUP", "VIC_SEX", "VIC_RACE","STATISTICAL_MURDER_FLAG")
+shooting_data <- shooting_data %>%
+  select(all_of(columns_to_keep))
+head(shooting_data)
+```  
+## Summary w/o cleaning
+```{r show_sum_no_clean}
+summary(shooting_data)
+```
+## Total up missing data in each column
+```{r missing_data_cnt}
+missing_counts <- colSums(is.na(shooting_data))
+print(missing_counts)
+
+```
+
+## Visualize missing data
+```{r viz_missing}
+library(VIM)
+aggr(shooting_data, col=c('green','red'), numbers=TRUE, sortVars=TRUE, labels=names(shooting_data), cex.axis=.5, gap=4, ylab=c("missing data","pattern"))
+```
+
+## Create an "UNKONWN" value for the missing data fields
+  It appears a significant amount of people might have gotten away with murder since over 30% of the missing data is from the perpetrator.  Therefore, we don't want to omit this data.  Instead, we want to just note that it is "UNKNOWN."  This should help us have less bias in conclusions on shootings and murders since we would have to make some major assumptions otherwise.
+```{r replace_missing}
+clean_data <- shooting_data %>%
+  mutate(
+    PERP_AGE_GROUP = replace_na(PERP_AGE_GROUP, "UNKNOWN"),
+    PERP_SEX = replace_na(PERP_SEX, "UNKNOWN"),
+    PERP_RACE = replace_na(PERP_RACE, "UNKNOWN"),
+    VIC_AGE_GROUP = replace_na(VIC_AGE_GROUP, "UNKNOWN"),
+    VIC_SEX = replace_na(VIC_SEX, "UNKNOWN"),
+    VIC_RACE = replace_na(VIC_RACE, "UNKNOWN")
+  )
+```
+  
+## Total up missing data in each column again
+```{r missing_data_cnt_again}
+missing_counts <- colSums(is.na(clean_data))
+print(missing_counts)
+
+```
+
+## Convert date to Date format
+```{r fix_date}
+clean_data <- clean_data %>%
+  mutate(OCCUR_DATE = as.Date(OCCUR_DATE, format = "%m/%d/%Y"))
+head(clean_data)
+```
+
+## Convert character columns to factors
+```{r fix_char}
+clean_data <- clean_data %>%
+  mutate(across(where(is.character), as.factor))
+head(clean_data)
+```
+
+## Summary w cleaning
+```{r show_sum_clean}
+summary(clean_data)
+```
+# Data Analysis
+## Bar plot of Perpetrator Age Group vs. Victim Age Group
+```{r perp_vs_vic_age,include=TRUE}
+ggplot(clean_data, aes(x = PERP_AGE_GROUP, fill = VIC_AGE_GROUP)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Perpetrator Age Group vs. Victim Age Group",
+       x = "Perpetrator Age Group",
+       y = "Count",
+       fill = "Victim Age Group") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8)) 
+```
+
+## Notice odd age groups
+Odd Perpetrator Age groups: 1020, 940, 224, 1028
+Odd Victim Age groups: 1022
+Replace with UNKNOWN for specific odd age groups for perpetrators and victims
+```{r remove_odd_age,include=TRUE}
+odd_perp_age_groups <- c("1020", "940", "224", "1028")
+odd_vic_age_groups <- c("1022")
+
+clean_data <- clean_data %>%
+  mutate(
+    PERP_AGE_GROUP = case_when(
+      PERP_AGE_GROUP %in% odd_perp_age_groups ~ "UNKNOWN",
+      TRUE ~ PERP_AGE_GROUP
+    ),
+    VIC_AGE_GROUP = case_when(
+      VIC_AGE_GROUP %in% odd_vic_age_groups ~ "UNKNOWN",
+      TRUE ~ VIC_AGE_GROUP
+    )
+  )
+```
+## Bar plot of Perpetrator Age Group vs. Victim Age Group - Verify Age 
+Notice the vicitim and perpetrator age groups of 18-24 & 25-44 are the highest in these shooting of all known age groups.
+Again, perpetrator's UNKNOWN is significant relative to the age, and it appears reasonable to assume the UNKNOWN age is similar to their victim's age from this chart.
+```{r perp_vs_vic_age_verify,include=TRUE}
+ggplot(clean_data, aes(x = PERP_AGE_GROUP, fill = VIC_AGE_GROUP)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Perpetrator Age Group vs. Victim Age Group",
+       x = "Perpetrator Age Group",
+       y = "Count",
+       fill = "Victim Age Group") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8)) 
+```
+
+## Bar plot by Perpetrator Sex
+```{r perp_vs_vic_sex,include=TRUE}
+ggplot(clean_data, aes(x = PERP_AGE_GROUP, fill = VIC_SEX)) +
+  geom_bar(position = "dodge") +
+  facet_wrap(~ PERP_SEX) +
+  labs(title = "Perpetrator Age Group vs. Victim Sex Faceted by Perpetrator Sex",
+       x = "Perpetrator Age Group",
+       y = "Count",
+       fill = "Victim Sex") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8)) 
+```
+
+## Replace sex "U" with "UNKNOWN"
+```{r fix_U_UNKONWN_sex}
+# add levels to sex for UKNOWN if not in it
+levels(clean_data$PERP_SEX) <- c(levels(clean_data$PERP_SEX), "UNKNOWN")
+levels(clean_data$PERP_AGE_GROUP) <- c(levels(clean_data$PERP_AGE_GROUP), "UNKNOWN")
+levels(clean_data$PERP_RACE) <- c(levels(clean_data$PERP_RACE), "UNKNOWN")
+levels(clean_data$VIC_SEX) <- c(levels(clean_data$VIC_SEX), "UNKNOWN")
+levels(clean_data$VIC_AGE_GROUP) <- c(levels(clean_data$VIC_AGE_GROUP), "UNKNOWN")
+levels(clean_data$VIC_RACE) <- c(levels(clean_data$VIC_RACE), "UNKNOWN")
+clean_data <- clean_data %>%
+  mutate(
+    PERP_SEX = replace(PERP_SEX, PERP_SEX == "U", "UNKNOWN"),
+    VIC_SEX = replace(VIC_SEX, VIC_SEX == "U", "UNKNOWN")
+  )
+
+```
+
+## Bar plot by Perpetrator Sex Clean
+```{r perp_vs_vic_sex_clean,include=TRUE}
+ggplot(clean_data, aes(x = PERP_AGE_GROUP, fill = VIC_SEX)) +
+  geom_bar(position = "dodge") +
+  facet_wrap(~ PERP_SEX) +
+  labs(title = "Perpetrator Age Group vs. Victim Sex Faceted by Perpetrator Sex",
+       x = "Perpetrator Age Group",
+       y = "Count",
+       fill = "Victim Sex") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8)) 
+```
+
+
+## Bar plot by Perpetrator Race vs. Age Group
+```{r perp_vs_vic_race,include=TRUE}
+ggplot(clean_data, aes(x = PERP_AGE_GROUP, fill = VIC_RACE)) +
+  geom_bar(position = "dodge") +
+  facet_wrap(~ PERP_RACE) +
+  labs(title = "Perpetrator Age Group vs. Victim Race Faceted by Perpetrator Race",
+       x = "Perpetrator Age Group",
+       y = "Count",
+       fill = "Victim Race") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),axis.title = element_text(angle=45,size=8),strip.text = element_text(size = 5))
+```
+
+## Bar plot by Perpetrator Race vs. Sex
+It appears that Black Males are the majority of shooters among all races and genders.
+```{r perp_vs_vic_race_sex,include=TRUE}
+ggplot(clean_data, aes(x = PERP_SEX, fill = VIC_RACE)) +
+  geom_bar(position = "dodge") +
+  facet_wrap(~ PERP_RACE) +
+  labs(title = "Perpetrator SEX vs. Victim Race Faceted by Perpetrator Race",
+       x = "Perpetrator SEX",
+       y = "Count",
+       fill = "Victim Race") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),axis.title = element_text(angle=45,size=8),strip.text = element_text(size = 5))
+```
+
+# Model Selection/training
+## Multinomial logistic regression model
+## Remove unused levels
+When training a model, we need to ensure that the levels are consistent.
+```{r clean_levels}
+clean_data <- droplevels(clean_data)
+```
+## Model for PERP_AGE_GROUP
+```{r age_model_perp}
+age_model <- multinom(PERP_AGE_GROUP ~ VIC_AGE_GROUP + VIC_RACE + VIC_SEX, data = clean_data)
+summary(age_model)
+```
+
+## Model for PERP_RACE
+```{r race_model_perp}
+race_model <- multinom(PERP_RACE ~ VIC_AGE_GROUP + VIC_RACE + VIC_SEX, data = clean_data)
+summary(race_model)
+```
+
+## Model for PERP_SEX
+```{r sex_model_perp}
+sex_model <- multinom(PERP_SEX ~ VIC_AGE_GROUP + VIC_RACE + VIC_SEX, data = clean_data)
+summary(sex_model)
+```
+
+## Inference with Model on Sample Data Point
+Define a single data point for victim characteristics
+```{r single_point_data}
+# Define a single data point for victim characteristics
+single_data_point <- clean_data[1, c("VIC_AGE_GROUP", "VIC_RACE", "VIC_SEX")]
+single_data_point[1, ] <- list("25-44", "WHITE", "M")
+```
+### Predict the perpetrator's age group
+```{r predict_age}
+predicted_age_group <- predict(age_model, newdata = single_data_point)
+print(paste("Predicted Perpetrator Age Group:", predicted_age_group))
+```
+### Predict the perpetrator's race
+```{r predict_race}
+predicted_race <- predict(race_model, newdata = single_data_point)
+print(paste("Predicted Perpetrator Race:", predicted_race))
+```
+
+### Predict the perpetrator's sex
+```{r predict_sex}
+predicted_sex <- predict(sex_model, newdata = single_data_point)
+print(paste("Predicted Perpetrator Sex:", predicted_sex))
+```
+
+# Bias Identification/Conclusion  
+  This dataset is strictly for New York City.  So the data found here might not apply outside of this city in other parts of America or the world at large.  Since I live in New York, but outside of New York City (source of this dataset), my **personal bias** might be that there isn't as many shootings.  However, if I were to spend time in New York City, my **personal bias** might be more corrected by what I am able to observe, **mitigating** its overall effect on my analysis/conclusions.  
+
+  From this dataset, it might appear that Black Males have the largest correlation with shooting.  However, there is a significant amount of UNKNOWN data.  Therefore, there could be bias built into this dataset to conclude UNKNOWN or Black Males are the number one perpetrators in shooting cases.  It could be that another race has been getting away with shooting or murder much easier.  This bias is observed by looking at the model's predictions given a single data point at random.  The prediction appears to align very well with the visualization plots of the data, making it appear that the bias in the data is translated into the model's performance.  Garbage in, garbage out might apply here to the model's prediction.  By solving more of the UNKNOWN values, the model might have less bias and be more informative.  
+  
+  In conclusion, all we know is that there is a significant amount of UNKNOWN shooters out there, and from what we do know, a large number of them appear to be Black Males from this dataset.  Using a model based on this dataset that predicts the perpertator given the victim's race, age, and gender might give very biased results as shown in this analysis.    
+
