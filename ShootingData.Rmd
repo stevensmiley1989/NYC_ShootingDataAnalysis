@@ -33,6 +33,9 @@ if (!requireNamespace("VIM", quietly = TRUE)) {
 if (!requireNamespace("nnet", quietly = TRUE)) {
   install.packages("nnet")
 }
+if (!requireNamespace("pwr", quietly = TRUE)) {
+  install.packages("pwr")
+}
 # import libraries
 library(readr)
 library(dplyr)
@@ -40,6 +43,7 @@ library(ggplot2)
 library(VIM)
 library(tidyr)
 library(nnet)
+library(pwr)
 
 ```
 # Data Loading
@@ -150,9 +154,12 @@ clean_data <- clean_data %>%
       TRUE ~ VIC_AGE_GROUP
     )
   )
+clean_data <- clean_data %>%
+  mutate(across(where(is.character), as.factor))
+head(clean_data)
 ```
 ## Bar plot of Perpetrator Age Group vs. Victim Age Group - Verify Age 
-Notice the vicitim and perpetrator age groups of 18-24 & 25-44 are the highest in these shooting of all known age groups.
+Notice the victim and perpetrator age groups of 18-24 & 25-44 are the highest in these shooting of all known age groups.
 Again, perpetrator's UNKNOWN is significant relative to the age, and it appears reasonable to assume the UNKNOWN age is similar to their victim's age from this chart.
 ```{r perp_vs_vic_age_verify,include=TRUE}
 ggplot(clean_data, aes(x = PERP_AGE_GROUP, fill = VIC_AGE_GROUP)) +
@@ -238,6 +245,42 @@ When training a model, we need to ensure that the levels are consistent.
 ```{r clean_levels}
 clean_data <- droplevels(clean_data)
 ```
+```{r contin_tables}
+# Contingency table for Victim Age Group vs. Perpetrator Age Group
+table_vic_perp_age <- table(clean_data$VIC_AGE_GROUP, clean_data$PERP_AGE_GROUP)
+print(table_vic_perp_age)
+
+# Contingency table for Victim Race vs. Perpetrator Race
+table_vic_perp_race <- table(clean_data$VIC_RACE, clean_data$PERP_RACE)
+print(table_vic_perp_race)
+
+# Contingency table for Victim Sex vs. Perpetrator Sex
+table_vic_perp_sex <- table(clean_data$VIC_SEX, clean_data$PERP_SEX)
+print(table_vic_perp_sex)
+
+# Unique values for victim and perpetrator characteristics
+unique_vic_race <- unique(clean_data$VIC_RACE)
+unique_vic_sex <- unique(clean_data$VIC_SEX)
+unique_vic_age_group <- unique(clean_data$VIC_AGE_GROUP)
+
+unique_perp_race <- unique(clean_data$PERP_RACE)
+unique_perp_sex <- unique(clean_data$PERP_SEX)
+unique_perp_age_group <- unique(clean_data$PERP_AGE_GROUP)
+
+# Generate all combinations of perpetrator race, gender, and age group
+all_combinations <- expand.grid(
+  VIC_RACE = unique_vic_race,
+  VIC_SEX = unique_vic_sex,
+  VIC_AGE_GROUP = unique_vic_age_group,
+  PERP_RACE = unique_perp_race,
+  PERP_SEX = unique_perp_sex,
+  PERP_AGE_GROUP = unique_perp_age_group
+)
+
+# View the first few rows of the generated combinations
+head(all_combinations)
+
+```
 ## Model for PERP_AGE_GROUP
 ```{r age_model_perp}
 age_model <- multinom(PERP_AGE_GROUP ~ VIC_AGE_GROUP + VIC_RACE + VIC_SEX, data = clean_data)
@@ -280,10 +323,271 @@ predicted_sex <- predict(sex_model, newdata = single_data_point)
 print(paste("Predicted Perpetrator Sex:", predicted_sex))
 ```
 
+### Look at predicted probabilities
+Generate all combinations for a specific victim profile
+```{r specific_combos}
+specific_combinations <- expand.grid(
+  VIC_RACE = "WHITE", 
+  VIC_SEX = "M",       
+  VIC_AGE_GROUP = "25-44", 
+  PERP_RACE = unique(clean_data$PERP_RACE),
+  PERP_SEX = unique(clean_data$PERP_SEX),
+  PERP_AGE_GROUP = unique(clean_data$PERP_AGE_GROUP)
+)
+# Predict probabilities for the specific victim profile
+predicted_probabilities_age_model <- predict(age_model, newdata = specific_combinations, type = "probs")
+
+# Combine the predictions with the specific combinations
+results_with_probabilities_age_model <- cbind(specific_combinations, predicted_probabilities_age_model)
+
+# Predict probabilities for the specific victim profile
+predicted_probabilities_race_model <- predict(race_model, newdata = specific_combinations, type = "probs")
+
+# Combine the predictions with the specific combinations
+results_with_probabilities_race_model <- cbind(specific_combinations, predicted_probabilities_race_model)
+
+# Predict probabilities for the specific victim profile
+predicted_probabilities_sex_model <- predict(sex_model, newdata = specific_combinations, type = "probs")
+
+# Combine the predictions with the specific combinations
+results_with_probabilities_sex_model <- cbind(specific_combinations, predicted_probabilities_sex_model)
+
+# View the results
+head(results_with_probabilities_age_model)
+# View the results
+head(results_with_probabilities_race_model)
+# View the results
+head(results_with_probabilities_sex_model)
+
+
+# Initialize an empty data frame to store the results
+results_combined <- data.frame(
+  PERP_Sex = character(),
+  PERP_Age_Group = character(),
+  PERP_Race_Group = character(),
+  Combined_Probability = numeric(),
+  stringsAsFactors = FALSE
+)
+
+
+for (sex in unique_perp_sex) {
+  for (age_group in unique_perp_age_group) {
+    for (race_group in unique_perp_race) {
+      
+      # Extract the corresponding probabilities from each model
+      age_prob <- results_with_probabilities_age_model[[age_group]][results_with_probabilities_age_model$PERP_SEX == sex & 
+                                                                     results_with_probabilities_age_model$PERP_RACE == race_group]
+      age_prob <- age_prob[1]
+      
+      race_prob <- results_with_probabilities_race_model[[race_group]][results_with_probabilities_race_model$PERP_SEX == sex & 
+                                                                       results_with_probabilities_race_model$PERP_AGE_GROUP == age_group]
+      race_prob <- race_prob[1]
+      
+      sex_prob <- results_with_probabilities_sex_model[[sex]][results_with_probabilities_sex_model$PERP_AGE_GROUP == age_group & 
+                                                               results_with_probabilities_sex_model$PERP_RACE == race_group]
+      sex_prob <- sex_prob[1]
+      
+      # Ensure there's only one value returned, if not handle accordingly
+      if (length(age_prob) == 1 && length(race_prob) == 1 && length(sex_prob) == 1) {
+        
+        # Calculate the combined probability
+        combined_prob <- age_prob * race_prob * sex_prob
+        
+        # Store the result
+        results_combined <- rbind(results_combined, data.frame(PERP_Sex = sex, PERP_Age_Group = age_group, PERP_Race_Group = race_group, Combined_Probability = combined_prob))
+      }
+    }
+  }
+}
+
+# View the results
+# Sort the data frame by the Combined_Probability column in descending order
+results_combined_sorted <- results_combined[order(-results_combined$Combined_Probability), ]
+head(results_combined_sorted)
+
+
+
+```
+## All vic combinations
+```{r all_vic_comb}
+suppressWarnings({# Initialize an empty data frame to store the results
+results_combined_ALL <- data.frame(
+  VIC_Sex = character(),
+  VIC_Age_Group = character(),
+  VIC_Race_Group = character(),
+  PERP_Sex = character(),
+  PERP_Age_Group = character(),
+  PERP_Race_Group = character(),
+  Combined_Probability = numeric(),
+  stringsAsFactors = FALSE
+)
+results_combined_ALL_filtered <- data.frame(
+  VIC_Sex = character(),
+  VIC_Age_Group = character(),
+  VIC_Race_Group = character(),
+  PERP_Sex = character(),
+  PERP_Age_Group = character(),
+  PERP_Race_Group = character(),
+  Count = integer(),
+  Probability = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Loop through each combination of sex, age group, and race group
+for (sex_vic in unique_vic_sex){
+  for (age_group_vic in unique_vic_age_group){
+    for (race_group_vic in unique_vic_race){
+      specific_combinations <- expand.grid(
+        VIC_RACE = race_group_vic, 
+        VIC_SEX = sex_vic,       
+        VIC_AGE_GROUP = age_group_vic, 
+        PERP_RACE = unique(clean_data$PERP_RACE),
+        PERP_SEX = unique(clean_data$PERP_SEX),
+        PERP_AGE_GROUP = unique(clean_data$PERP_AGE_GROUP))
+      # Predict probabilities for the specific victim profile
+      predicted_probabilities_age_model <- predict(age_model, newdata = specific_combinations, type = "probs")
+      
+      # Combine the predictions with the specific combinations
+      results_with_probabilities_age_model <- cbind(specific_combinations, predicted_probabilities_age_model)
+      
+      # Predict probabilities for the specific victim profile
+      predicted_probabilities_race_model <- predict(race_model, newdata = specific_combinations, type = "probs")
+      
+      # Combine the predictions with the specific combinations
+      results_with_probabilities_race_model <- cbind(specific_combinations, predicted_probabilities_race_model)
+      
+      # Predict probabilities for the specific victim profile
+      predicted_probabilities_sex_model <- predict(sex_model, newdata = specific_combinations, type = "probs")
+      
+      # Combine the predictions with the specific combinations
+      results_with_probabilities_sex_model <- cbind(specific_combinations, predicted_probabilities_sex_model)
+      
+      filtered_data <- clean_data %>%
+        filter(VIC_RACE == race_group_vic, VIC_SEX == sex_vic, VIC_AGE_GROUP == age_group_vic)
+      
+      # Calculate the frequency of each perpetrator combination
+      perp_combinations <- filtered_data %>%
+        group_by(PERP_RACE, PERP_SEX, PERP_AGE_GROUP) %>%
+        summarise(Count = n(), .groups = 'drop') %>%
+        mutate(Probability = Count / sum(Count))  # Calculate observed probabilities
+      
+      # Ensure that the columns match between the two data frames before rbind
+      perp_comb_binded <- data.frame(
+        VIC_Sex = rep(sex_vic, nrow(perp_combinations)),
+        VIC_Age_Group = rep(age_group_vic, nrow(perp_combinations)),
+        VIC_Race_Group = rep(race_group_vic, nrow(perp_combinations)),
+        PERP_Sex = perp_combinations$PERP_SEX,
+        PERP_Age_Group = perp_combinations$PERP_AGE_GROUP,
+        PERP_Race_Group = perp_combinations$PERP_RACE,
+        Count = perp_combinations$Count,
+        Probability = perp_combinations$Probability,
+        stringsAsFactors = FALSE
+      )
+      
+      # Store the result
+      results_combined_ALL_filtered <- rbind(results_combined_ALL_filtered, perp_comb_binded)
+
+      for (sex in unique_perp_sex) {
+        for (age_group in unique_perp_age_group) {
+          for (race_group in unique_perp_race) {
+            
+            # Extract the corresponding probabilities from each model
+            age_prob <- results_with_probabilities_age_model[[age_group]][results_with_probabilities_age_model$PERP_SEX == sex & 
+                                                                           results_with_probabilities_age_model$PERP_RACE == race_group]
+            age_prob <- age_prob[1]
+            
+            race_prob <- results_with_probabilities_race_model[[race_group]][results_with_probabilities_race_model$PERP_SEX == sex & 
+                                                                             results_with_probabilities_race_model$PERP_AGE_GROUP == age_group]
+            race_prob <- race_prob[1]
+            
+            sex_prob <- results_with_probabilities_sex_model[[sex]][results_with_probabilities_sex_model$PERP_AGE_GROUP == age_group & 
+                                                                     results_with_probabilities_sex_model$PERP_RACE == race_group]
+            sex_prob <- sex_prob[1]
+            
+            # Ensure there's only one value returned, if not handle accordingly
+            if (length(age_prob) == 1 && length(race_prob) == 1 && length(sex_prob) == 1) {
+              
+              # Calculate the combined probability
+              combined_prob <- age_prob * race_prob * sex_prob
+              
+              # Store the result
+              results_combined_ALL <- rbind(results_combined_ALL, data.frame(
+                VIC_Sex = sex_vic, 
+                VIC_Age_Group = age_group_vic, 
+                VIC_Race_Group = race_group_vic, 
+                PERP_Sex = sex, 
+                PERP_Age_Group = age_group, 
+                PERP_Race_Group = race_group, 
+                Combined_Probability = combined_prob,
+                stringsAsFactors = FALSE
+              ))
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+# View the results
+# Sort the data frame by the Combined_Probability column in descending order
+results_combined_sorted_ALL <- results_combined_ALL[order(-results_combined_ALL$Combined_Probability), ]
+head(results_combined_sorted_ALL)
+
+results_combined_sorted_ALL_filtered <- results_combined_ALL_filtered[order(-results_combined_ALL_filtered$Probability), ]
+head(results_combined_sorted_ALL_filtered)})
+
+```
+
+```{r stat_power}
+# Set minimum count threshold, lets look at the power of all counts
+min_count_threshold <- 1
+
+# Filter the results by this threshold
+results_significant <- results_combined_sorted_ALL_filtered %>%
+  filter(Count >= min_count_threshold)
+
+# View the filtered significant results
+head(results_significant)
+
+
+# Number of unique levels in each category (n)
+n_race <- length(unique(results_significant$PERP_Race_Group))
+n_sex <- length(unique(results_significant$PERP_Sex))
+n_age_group <- length(unique(results_significant$PERP_Age_Group))
+
+# Calculate degrees of freedom (DOF)
+df <- (n_race - 1) * (n_sex - 1) * (n_age_group - 1)
+calculate_power <- function(row,df) {
+    effect_size <- 0.3 
+    alpha <- 0.05 
+    group_sample_size <- as.numeric(row['Count'])
+    df_group <- df
+    power_result <- pwr.chisq.test(w = effect_size, N = group_sample_size, df = df_group, sig.level = alpha)
+    return(power_result$power)
+}
+
+results_significantwpower <- results_significant %>%
+    rowwise() %>%
+    mutate(Power = calculate_power(cur_data(),df))
+head(results_significantwpower)
+# A good power level cutoff is 80%.  This would mean that there is an 80% chance of detecting an effect if one truly exists.
+# So lets look at values that are above the cutoff of 80%.
+results_significantwpowergt80 <- results_significantwpower %>% filter(Power>0.8)
+# This shows only 24 of the ~967 combinations have enough power to say there is this 80% chance.  We would need more data in the other groups to have the same power.
+
+```
+### Look at filtered_data on myself
+We saw earlier the model predicted that I (MALE, 34 years old, and WHITE) would most likely be shot by someone who was UNKNOWN or BLACK, similar age and race.  However, we now can see how much power there is behind that prediction.  And it appears not much.  The probabilities aren't much different, but the power is less than 20%.  This means that we can't say there is a 20% chance of detecting an effect if one truly exists here.  
+```{r filtered_data_on_self_w_power}
+results_significantwpower[results_significantwpower$VIC_Sex=="M" & results_significantwpower$VIC_Age_Group=="25-44"& results_significantwpower$VIC_Race_Group=="WHITE",]
+```
 # Bias Identification/Conclusion  
   This dataset is strictly for New York City.  So the data found here might not apply outside of this city in other parts of America or the world at large.  Since I live in New York, but outside of New York City (source of this dataset), my **personal bias** might be that there isn't as many shootings.  However, if I were to spend time in New York City, my **personal bias** might be more corrected by what I am able to observe, **mitigating** its overall effect on my analysis/conclusions.  
 
-  From this dataset, it might appear that Black Males have the largest correlation with shooting.  However, there is a significant amount of UNKNOWN data.  Therefore, there could be bias built into this dataset to conclude UNKNOWN or Black Males are the number one perpetrators in shooting cases.  It could be that another race has been getting away with shooting or murder much easier.  This bias is observed by looking at the model's predictions given a single data point at random.  The prediction appears to align very well with the visualization plots of the data, making it appear that the bias in the data is translated into the model's performance.  Garbage in, garbage out might apply here to the model's prediction.  By solving more of the UNKNOWN values, the model might have less bias and be more informative.  
+  From this dataset, there is a significant amount of UNKNOWN data.  However, with the UNKNOWN data aside, it might appear that Black Males have the largest correlation with shooting.  Therefore, there could be bias built into this dataset to conclude UNKNOWN or Black Males are the number one perpetrators in shooting cases.  The power analysis I did showed this because only 14 of the ~967 combinations had a power level greater than 80% chance of detecting an effect if one truly exists.  Thus, the models I made would carry the bias of the data into them as they did.  We would need more data in the other missing groups to have more statistical power.  It could be that another race/gender/age has been getting away with shooting or murder much easier.  Therefore, garbage in, garbage out might apply here to the model's prediction.  
   
-  In conclusion, all we know is that there is a significant amount of UNKNOWN shooters out there, and from what we do know, a large number of them appear to be Black Males from this dataset.  Using a model based on this dataset that predicts the perpertator given the victim's race, age, and gender might give very biased results as shown in this analysis.    
+  When we look at the models fit to the data we observe for a victim of my age, gender, and race [34,M,White] that the perpetrator is most likely a Male, between 25-44, and of an UNKNOWN race.  Excluding the UNKNOWN, the perpetrator is most likely a Male, between 25-44, and Black with less than a 7% chance of this combination.  And interesting enough, at only a 6% chance, the same categories as myself would predict a perpetrator.  This tells me that there is a positive correlation between the victim and the perpetrator in terms of their race, sex, and age.  We further investigated the statistical power of these predictions of the model's by looking at the filtered data without the model and performing a statistical power test.  We found that the probabilities aren't much different, but the statistical power is less than 20%.  This means that we can't say there is a 20% chance of detecting an effect if one truly exists here.  
+  
+  In conclusion, all we know is that there is a significant amount of UNKNOWN shooters out there, and from what we do know, a large number of them appear to be Black Males from this dataset.  Using a model based on this dataset that predicts the perpetrator given the victim's race, age, and gender likely will give very biased results as shown in this analysis because of this missing data and also because of the lack of diverse data.  Hopefully with time, we can solve more of the mystery cases out there to fill in the missing data.  With time, there might be more data that adds to statistical significance of potential models or analysis.  
 
